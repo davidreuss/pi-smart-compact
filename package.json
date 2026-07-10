@@ -1,6 +1,6 @@
 {
   "name": "@wienerberliner/pi-smart-compact",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "smart cooperative compaction extension for pi agents and subagents.",
   "license": "MIT",
   "type": "module",
@@ -20,16 +20,23 @@
     ]
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
-  },
-  "dependencies": {
+    "vitest": "^3.2.4",
     "typebox": "^1.1.38"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "extensions",
+    "src"
+  ]
 }

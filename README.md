@@ -4,20 +4,20 @@
 
 Instead of imposing a hard cutoff, the extension watches context usage, sends visible boundary warnings, asks the active agent to finish the current atomic task, save important state, write its own handoff, and call the `smart_compact` tool. That handoff becomes the same-session compaction summary, then the extension sends one automatic `continue` so work resumes without creating a replacement session.
 
-> Status: development package with the core extension behavior implemented and covered by mocked Pi API tests. Manual verification in a real Pi session should follow [`docs/manual-testing.md`](docs/manual-testing.md) before publishing.
+> Status: published on npm. Version `0.1.2` includes the core extension behavior covered by mocked Pi API tests. See [`docs/manual-testing.md`](docs/manual-testing.md) for real-session verification.
 
 ## Installation
 
-Install from npm after publishing:
+Install version `0.1.2` from npm:
+
+```sh
+pi install npm:@wienerberliner/pi-smart-compact@0.1.2
+```
+
+To install the latest published version without pinning it:
 
 ```sh
 pi install npm:@wienerberliner/pi-smart-compact
-```
-
-For the first public publish of the scoped package, use npm's public access flag:
-
-```sh
-npm publish --access public
 ```
 
 Install from GitHub:
@@ -134,10 +134,21 @@ Manual or native Pi compaction without a pending smart handoff behaves normally.
 
 ```sh
 npm test
-npx tsc --noEmit
+npm run typecheck
 ```
 
 See [`docs/prd.md`](docs/prd.md) for product requirements and [`docs/manual-testing.md`](docs/manual-testing.md) for manual verification.
+
+## Publishing
+
+Publishing uses npm Trusted Publishing from GitHub Actions. Bump the package version, commit the change, then push the generated `v*` tag:
+
+```sh
+npm version patch
+git push --follow-tags
+```
+
+The pushed tag runs [`.github/workflows/publish.yml`](.github/workflows/publish.yml), validates the package, and publishes it publicly to npm without an npm token.
 
 ## License
 
