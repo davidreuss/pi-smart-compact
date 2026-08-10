@@ -221,7 +221,9 @@ async function continueAfterSmartCompaction(
   notifyIfAvailable(ctx, "Smart compaction completed. Continuing the same session.");
 
   try {
-    await Promise.resolve(pi.sendUserMessage("continue", {}));
+    // session_compact may fire before the terminating smart_compact run has fully
+    // settled. Queue the continuation instead of requiring Pi to be idle here.
+    pi.sendUserMessage("continue", { deliverAs: "followUp" });
   } catch (error) {
     notifyIfAvailable(ctx, `Smart compaction completed, but automatic continuation could not be sent: ${errorMessage(error)}`, "error");
   }

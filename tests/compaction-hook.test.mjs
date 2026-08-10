@@ -179,8 +179,8 @@ describe("U5 compaction summary hook and continuation flow", () => {
 
     assert.deepEqual(
       mock.state.sentUserMessages,
-      [{ message: "continue", options: {} }],
-      "matching smart compaction should send exactly one plain continue message even if session_compact is duplicated",
+      [{ message: "continue", options: { deliverAs: "followUp" } }],
+      "matching smart compaction should queue exactly one follow-up continuation even if session_compact fires while the agent run is still settling or is duplicated",
     );
 
     const laterManual = await invokeBeforeCompact(mock, compactionEvent({ preparation: { ...compactionEvent().preparation, firstKeptEntryId: "later-entry", tokensBefore: 777 } }), ctx);

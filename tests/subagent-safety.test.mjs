@@ -121,6 +121,10 @@ describe("U5 subagent same-session safety", () => {
     );
 
     assert.equal(mock.state.replacementSessionCalls.length, 0, "smart compaction must not call newSession/fork/switchSession for subagents");
-    assert.deepEqual(mock.state.sentUserMessages, [{ message: "continue", options: {} }], "subagent should receive one same-session continue");
+    assert.deepEqual(
+      mock.state.sentUserMessages,
+      [{ message: "continue", options: { deliverAs: "followUp" } }],
+      "subagent should receive one queued same-session continuation while its run settles",
+    );
   });
 });
