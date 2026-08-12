@@ -101,30 +101,15 @@ describe("U5 subagent same-session safety", () => {
     const beforeResult = await getOnlyHandler(mock, "session_before_compact")(compactionEvent(), ctx);
 
     assert.ok(beforeResult?.compaction, "subagent smart_compact should customize summary in the same session");
-    await getOnlyHandler(mock, "session_compact")(
-      {
-        type: "session_compact",
-        fromExtension: true,
-        compactionEntry: {
-          type: "compaction",
-          id: "subagent-saved-compaction",
-          parentId: "subagent-parent-entry",
-          timestamp: Date.now(),
-          summary: beforeResult.compaction.summary,
-          firstKeptEntryId: beforeResult.compaction.firstKeptEntryId,
-          tokensBefore: beforeResult.compaction.tokensBefore,
-          fromHook: true,
-          details: beforeResult.compaction.details,
-        },
-      },
-      ctx,
-    );
+    const compactOptions = mock.state.compactCalls[0]?.[0];
+    assert.equal(typeof compactOptions?.onComplete, "function", "subagent continuation should wait for Pi's post-compaction callback");
+    await compactOptions.onComplete({});
 
     assert.equal(mock.state.replacementSessionCalls.length, 0, "smart compaction must not call newSession/fork/switchSession for subagents");
     assert.deepEqual(
       mock.state.sentUserMessages,
       [{ message: "continue", options: { deliverAs: "followUp" } }],
-      "subagent should receive one queued same-session continuation while its run settles",
+      "subagent should receive one queued same-session continuation after compaction fully completes",
     );
   });
 });

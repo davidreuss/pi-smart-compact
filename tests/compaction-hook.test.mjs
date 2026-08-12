@@ -58,10 +58,6 @@ async function invokeBeforeCompact(mock, event, ctx = mock.createContext({ hasUI
   return getOnlyHandler(mock, "session_before_compact")(event, ctx);
 }
 
-async function invokeSessionCompact(mock, event, ctx = mock.createContext({ hasUI: true })) {
-  return getOnlyHandler(mock, "session_compact")(event, ctx);
-}
-
 function validHandoff(label = "handoff") {
   return [
     `Progress/current task: ${label} is paused at a safe smart compaction boundary.`,
@@ -97,23 +93,6 @@ function compactionEvent(overrides = {}) {
   };
 }
 
-function compactionEntryFromResult(result, overrides = {}) {
-  const compaction = result?.compaction;
-  assert.ok(compaction, "expected a custom compaction result to build the session_compact event");
-  return {
-    type: "compaction",
-    id: "saved-compaction-entry-1",
-    parentId: "entry-before-compaction",
-    timestamp: Date.now(),
-    summary: compaction.summary,
-    firstKeptEntryId: compaction.firstKeptEntryId,
-    tokensBefore: compaction.tokensBefore,
-    fromHook: true,
-    details: compaction.details,
-    ...overrides,
-  };
-}
-
 function assertNoOverride(result, message) {
   assert.ok(
     result === undefined || result?.compaction === undefined,
@@ -126,11 +105,15 @@ function sentContinueMessages(mock) {
 }
 
 describe("U5 compaction summary hook and continuation flow", () => {
-  it("registers session_before_compact and session_compact hooks", async () => {
+  it("registers the pre-compaction summary hook without dispatching from session_compact", async () => {
     const mock = await setupExtension();
 
     getOnlyHandler(mock, "session_before_compact");
-    getOnlyHandler(mock, "session_compact");
+    assert.equal(
+      (mock.state.handlers.get("session_compact") ?? []).length,
+      0,
+      "continuation must use ctx.compact onComplete because Pi still rejects prompts during session_compact",
+    );
   });
 
   it("returns no override for manual/native compaction when no smart handoff is pending", async () => {
@@ -160,64 +143,52 @@ describe("U5 compaction summary hook and continuation flow", () => {
     assert.match(JSON.stringify(result.compaction.details ?? {}), /smart-compact-\d+/, "details should carry a smart compaction id for matching session_compact");
   });
 
-  it("clears pending state and sends exactly one continue when the matching smart compaction completes", async () => {
+  it("waits for ctx.compact onComplete before sending continue", async () => {
     const mock = await setupExtension();
     const tool = getSmartCompactTool(mock);
-    const ctx = mock.createContext({ hasUI: true });
-    const handoff = validHandoff("complete once");
-
-    await invokeSmartCompact(tool, { handoff }, ctx);
-    const beforeResult = await invokeBeforeCompact(mock, compactionEvent(), ctx);
-    const completedEvent = {
-      type: "session_compact",
-      compactionEntry: compactionEntryFromResult(beforeResult),
-      fromExtension: true,
+    let compactionInProgress = true;
+    mock.pi.sendUserMessage = async (message, options = {}) => {
+      assert.equal(compactionInProgress, false, "Pi rejects prompts until compaction has fully completed");
+      mock.state.sentUserMessages.push({ message, options });
     };
+    const ctx = mock.createContext({ hasUI: true });
 
-    await invokeSessionCompact(mock, completedEvent, ctx);
-    await invokeSessionCompact(mock, completedEvent, ctx);
+    await invokeSmartCompact(tool, { handoff: validHandoff("onComplete continuation") }, ctx);
+
+    const compactOptions = mock.state.compactCalls[0]?.[0];
+    assert.equal(typeof compactOptions?.onComplete, "function", "smart_compact should continue from Pi's post-compaction callback");
+    assert.equal(sentContinueMessages(mock).length, 0, "continuation must not be sent while compaction is active");
+
+    compactionInProgress = false;
+    await compactOptions.onComplete({ details: { source: "pi-smart-compact" } });
 
     assert.deepEqual(
       mock.state.sentUserMessages,
       [{ message: "continue", options: { deliverAs: "followUp" } }],
-      "matching smart compaction should queue exactly one follow-up continuation even if session_compact fires while the agent run is still settling or is duplicated",
+      "completed smart compaction should resume exactly once after Pi clears its compaction guard",
     );
-
-    const laterManual = await invokeBeforeCompact(mock, compactionEvent({ preparation: { ...compactionEvent().preparation, firstKeptEntryId: "later-entry", tokensBefore: 777 } }), ctx);
-    assertNoOverride(laterManual, "completed smart compaction should clear pending handoff so later manual/native compaction is not overridden");
   });
 
-  it("does not send continue for unrelated/manual session_compact events while a smart compaction is pending", async () => {
+  it("clears pending state and sends exactly one continue when onComplete is duplicated", async () => {
     const mock = await setupExtension();
     const tool = getSmartCompactTool(mock);
     const ctx = mock.createContext({ hasUI: true });
 
-    await invokeSmartCompact(tool, { handoff: validHandoff("pending but unrelated completion") }, ctx);
+    await invokeSmartCompact(tool, { handoff: validHandoff("complete once") }, ctx);
+    await invokeBeforeCompact(mock, compactionEvent(), ctx);
+    const compactOptions = mock.state.compactCalls[0]?.[0];
 
-    await invokeSessionCompact(
-      mock,
-      {
-        type: "session_compact",
-        fromExtension: false,
-        compactionEntry: {
-          type: "compaction",
-          id: "manual-compaction-entry",
-          parentId: "manual-parent",
-          timestamp: Date.now(),
-          summary: "Native/manual compaction summary",
-          firstKeptEntryId: "manual-keep",
-          tokensBefore: 222,
-          details: { source: "native" },
-        },
-      },
-      ctx,
+    await compactOptions.onComplete({});
+    await compactOptions.onComplete({});
+
+    assert.deepEqual(
+      mock.state.sentUserMessages,
+      [{ message: "continue", options: { deliverAs: "followUp" } }],
+      "a duplicated completion callback must not queue a second continuation",
     );
 
-    assert.equal(sentContinueMessages(mock).length, 0, "unrelated/manual compaction completion must not resume the agent");
-
-    const result = await invokeBeforeCompact(mock, compactionEvent(), ctx);
-    assert.ok(result?.compaction, "unrelated manual completion should not clear the still-pending smart handoff");
-    assert.match(result.compaction.summary, /pending but unrelated completion/);
+    const laterManual = await invokeBeforeCompact(mock, compactionEvent({ preparation: { ...compactionEvent().preparation, firstKeptEntryId: "later-entry", tokensBefore: 777 } }), ctx);
+    assertNoOverride(laterManual, "completed smart compaction should clear pending handoff so later manual/native compaction is not overridden");
   });
 
   it("does not leak stale handoff into later native compaction after smart compaction fails through ctx.compact onError", async () => {
@@ -234,10 +205,12 @@ describe("U5 compaction summary hook and continuation flow", () => {
     });
 
     await invokeSmartCompact(tool, { handoff: failedHandoff }, ctx);
+    const compactOptions = mock.state.compactCalls[0]?.[0];
+    await compactOptions.onComplete({});
     const laterNativeResult = await invokeBeforeCompact(mock, compactionEvent(), ctx);
 
     assertNoOverride(laterNativeResult, "failed/cancelled smart compaction must expire pending state before later native compaction");
-    assert.equal(sentContinueMessages(mock).length, 0, "failed/cancelled smart compaction must not send continue");
+    assert.equal(sentContinueMessages(mock).length, 0, "a stale onComplete callback after failure must not send continue");
   });
 
   it("falls back safely when compaction preparation is missing or the hook signal is already aborted", async () => {

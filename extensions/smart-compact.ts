@@ -5,7 +5,6 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   SessionBeforeCompactEvent,
-  SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
@@ -158,7 +157,7 @@ function registerSmartCompactTool(pi: ExtensionAPI, runtimeState: SmartCompactRu
     ),
     executionMode: "sequential",
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-      return executeSmartCompact(params as { handoff?: unknown }, ctx, runtimeState);
+      return executeSmartCompact(pi, params as { handoff?: unknown }, ctx, runtimeState);
     },
   });
 }
@@ -166,10 +165,6 @@ function registerSmartCompactTool(pi: ExtensionAPI, runtimeState: SmartCompactRu
 function registerSmartCompactionHooks(pi: ExtensionAPI, runtimeState: SmartCompactRuntimeState): void {
   pi.on("session_before_compact", async (event, ctx) => {
     return prepareSmartCompactionSummary(event, ctx, runtimeState);
-  });
-
-  pi.on("session_compact", async (event, ctx) => {
-    await continueAfterSmartCompaction(pi, event, ctx, runtimeState);
   });
 }
 
@@ -202,34 +197,28 @@ function prepareSmartCompactionSummary(
 
 async function continueAfterSmartCompaction(
   pi: ExtensionAPI,
-  event: SessionCompactEvent,
+  pendingId: string,
   ctx: ExtensionContext,
   runtimeState: SmartCompactRuntimeState,
 ): Promise<void> {
   const pending = getPendingSmartCompaction(runtimeState);
-  if (!pending) {
-    return;
-  }
-
-  const completedSmartCompactionId = getSmartCompactionIdFromDetails(event.compactionEntry?.details);
-  if (completedSmartCompactionId !== pending.id) {
+  if (!pending || pending.id !== pendingId) {
     return;
   }
 
   clearPendingSmartCompaction(runtimeState, pending.id);
   resetEscalationState(runtimeState);
-  notifyIfAvailable(ctx, "Smart compaction completed. Continuing the same session.");
 
   try {
-    // session_compact may fire before the terminating smart_compact run has fully
-    // settled. Queue the continuation instead of requiring Pi to be idle here.
-    pi.sendUserMessage("continue", { deliverAs: "followUp" });
+    await Promise.resolve(pi.sendUserMessage("continue", { deliverAs: "followUp" }));
+    notifyIfAvailable(ctx, "Smart compaction completed. Continuing the same session.");
   } catch (error) {
     notifyIfAvailable(ctx, `Smart compaction completed, but automatic continuation could not be sent: ${errorMessage(error)}`, "error");
   }
 }
 
 async function executeSmartCompact(
+  pi: ExtensionAPI,
   params: { handoff?: unknown },
   ctx: ExtensionContext,
   runtimeState: SmartCompactRuntimeState,
@@ -259,6 +248,9 @@ async function executeSmartCompact(
 
   let callbackError: Error | undefined;
   const compactOptions: CompactOptions = {
+    onComplete: async () => {
+      await continueAfterSmartCompaction(pi, pending.id, ctx, runtimeState);
+    },
     onError: (error) => {
       callbackError = error;
       expirePendingSmartCompaction(runtimeState, pending.id);
@@ -322,27 +314,6 @@ function isValidCompactionPreparation(preparation: SessionBeforeCompactEvent["pr
     typeof preparation.tokensBefore === "number" &&
     Number.isFinite(preparation.tokensBefore)
   );
-}
-
-function getSmartCompactionIdFromDetails(details: unknown): string | undefined {
-  if (!isRecord(details)) {
-    return undefined;
-  }
-
-  if (typeof details.smartCompactionId === "string") {
-    return details.smartCompactionId;
-  }
-
-  const nested = details.smart_compact;
-  if (isRecord(nested) && typeof nested.id === "string") {
-    return nested.id;
-  }
-
-  return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 async function monitorContextUsage(
