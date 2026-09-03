@@ -18,6 +18,7 @@ export interface SmartBoundaryConfigReadResult {
   boundaryTokens: number;
   source: "default" | "custom" | "custom-model";
   modelKey?: string;
+  perModelBoundaryTokens?: Record<string, number>;
   warning?: string;
 }
 
@@ -61,12 +62,14 @@ export async function readSmartBoundaryConfig(
 
     const perModel = extractPerModelBoundaryTokens(parsed);
     const override = modelKey ? perModel?.[modelKey] : undefined;
+    const perModelField =
+      perModel && Object.keys(perModel).length > 0 ? { perModelBoundaryTokens: perModel } : {};
 
     if (override !== undefined) {
-      return { tokens: override, boundaryTokens: override, source: "custom-model", modelKey };
+      return { tokens: override, boundaryTokens: override, source: "custom-model", modelKey, ...perModelField };
     }
 
-    return { tokens, boundaryTokens: tokens, source: "custom", ...(modelKey ? { modelKey } : {}) };
+    return { tokens, boundaryTokens: tokens, source: "custom", ...(modelKey ? { modelKey } : {}), ...perModelField };
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return defaultResult(undefined, modelKey);

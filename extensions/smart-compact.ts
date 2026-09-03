@@ -68,9 +68,17 @@ export default function smartCompactExtension(pi: ExtensionAPI) {
 
       if (parsed.action === "show") {
         const current = await config.read({ modelKey: parsed.modelKey });
+        const message = describeCurrentBoundary(current, parsed.modelKey);
+        const overrides = current.perModelBoundaryTokens;
+        const overrideLines =
+          !parsed.modelKey && overrides
+            ? Object.entries(overrides)
+                .map(([key, tokens]) => `\n  ${key}: ${formatTokens(tokens)}`)
+                .join("")
+            : "";
         return notify(
           ctx,
-          describeCurrentBoundary(current, parsed.modelKey),
+          `${message}${overrideLines ? `${overrideLines}\n(prefix a model id to show, set, or reset one of these)` : ""}`,
           current.warning ? "warning" : "info",
         ) as unknown as void;
       }

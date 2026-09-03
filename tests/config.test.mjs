@@ -185,6 +185,17 @@ describe("U2 smart-boundary per-model override", () => {
     assert.equal(resultTokens(await store.read({ modelKey: otherModelKey })), 50_000);
   });
 
+  it("exposes the per-model map on a plain read so the UI can list overrides", async () => {
+    const filePath = await makeTempConfigPath();
+    const store = await makeStore(filePath);
+    await store.write(120_000);
+    await store.write(300_000, { modelKey });
+
+    const read = await store.read();
+
+    assert.deepEqual(read.perModelBoundaryTokens, { [modelKey]: 300_000 });
+  });
+
   it("resetting a per-model override falls back to the global boundary without touching other overrides", async () => {
     const filePath = await makeTempConfigPath();
     const store = await makeStore(filePath);

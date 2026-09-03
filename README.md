@@ -52,7 +52,7 @@ The default smart boundary is `100k` tokens (`100,000`). Warnings escalate every
 /smart-boundary
 ```
 
-Show the current global boundary.
+Show the current global boundary. Any existing per-model overrides are listed below it, so a plain `/smart-boundary` is also how you check what overrides are set.
 
 ```text
 /smart-boundary 100k
