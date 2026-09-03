@@ -9,12 +9,15 @@ export const SMART_BOUNDARY_CONFIG_ENV = "PI_SMART_COMPACT_CONFIG_PATH";
 export interface SmartBoundaryConfigOptions {
   configPath?: string;
   path?: string;
+  /** Model key ("provider/id") to resolve/write a per-model override instead of the global default. */
+  modelKey?: string;
 }
 
 export interface SmartBoundaryConfigReadResult {
   tokens: number;
   boundaryTokens: number;
-  source: "default" | "custom";
+  source: "default" | "custom" | "custom-model";
+  modelKey?: string;
   warning?: string;
 }
 
@@ -28,6 +31,7 @@ interface OnDiskSmartBoundaryConfig {
   smartBoundaryTokens?: unknown;
   boundaryTokens?: unknown;
   tokens?: unknown;
+  perModelBoundaryTokens?: unknown;
 }
 
 export function createSmartBoundaryConfig(options: SmartBoundaryConfigOptions = {}): SmartBoundaryConfigStore {
@@ -44,6 +48,7 @@ export async function readSmartBoundaryConfig(
   options: SmartBoundaryConfigOptions = {},
 ): Promise<SmartBoundaryConfigReadResult> {
   const filePath = resolveSmartBoundaryConfigPath(options);
+  const modelKey = normalizeModelKey(options.modelKey);
 
   try {
     const raw = await readFile(filePath, "utf8");
@@ -51,16 +56,23 @@ export async function readSmartBoundaryConfig(
     const tokens = extractBoundaryTokens(parsed);
 
     if (tokens === undefined) {
-      return defaultResult(`Could not read smart-boundary config at ${filePath}: missing a positive whole-number boundary.`);
+      return defaultResult(`Could not read smart-boundary config at ${filePath}: missing a positive whole-number boundary.`, modelKey);
     }
 
-    return { tokens, boundaryTokens: tokens, source: "custom" };
+    const perModel = extractPerModelBoundaryTokens(parsed);
+    const override = modelKey ? perModel?.[modelKey] : undefined;
+
+    if (override !== undefined) {
+      return { tokens: override, boundaryTokens: override, source: "custom-model", modelKey };
+    }
+
+    return { tokens, boundaryTokens: tokens, source: "custom", ...(modelKey ? { modelKey } : {}) };
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
-      return defaultResult();
+      return defaultResult(undefined, modelKey);
     }
 
-    return defaultResult(`Could not read smart-boundary config at ${filePath}: ${errorMessage(error)}. Using default.`);
+    return defaultResult(`Could not read smart-boundary config at ${filePath}: ${errorMessage(error)}. Using default.`, modelKey);
   }
 }
 
@@ -71,13 +83,23 @@ export async function writeSmartBoundaryConfig(
   assertPositiveWholeTokens(tokens);
 
   const filePath = resolveSmartBoundaryConfigPath(options);
+  const modelKey = normalizeModelKey(options.modelKey);
   await mkdir(nodePath.dirname(filePath), { recursive: true });
+
+  const existing = await readExistingConfig(filePath);
+  const nextGlobalTokens = modelKey ? existing.smartBoundaryTokens ?? DEFAULT_SMART_BOUNDARY_TOKENS : tokens;
+  const nextPerModel = modelKey ? { ...existing.perModelBoundaryTokens, [modelKey]: tokens } : existing.perModelBoundaryTokens;
+
+  const onDisk: OnDiskSmartBoundaryConfig = {
+    smartBoundaryTokens: nextGlobalTokens,
+    ...(nextPerModel && Object.keys(nextPerModel).length > 0 ? { perModelBoundaryTokens: nextPerModel } : {}),
+  };
 
   const tempPath = nodePath.join(
     nodePath.dirname(filePath),
     `${nodePath.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
   );
-  const payload = `${JSON.stringify({ smartBoundaryTokens: tokens }, null, 2)}\n`;
+  const payload = `${JSON.stringify(onDisk, null, 2)}\n`;
 
   try {
     await writeFile(tempPath, payload, "utf8");
@@ -87,13 +109,36 @@ export async function writeSmartBoundaryConfig(
     throw error;
   }
 
-  return { tokens, boundaryTokens: tokens, source: "custom" };
+  return modelKey
+    ? { tokens, boundaryTokens: tokens, source: "custom-model", modelKey }
+    : { tokens, boundaryTokens: tokens, source: "custom" };
 }
 
 export async function resetSmartBoundaryConfig(
   options: SmartBoundaryConfigOptions = {},
 ): Promise<SmartBoundaryConfigReadResult> {
   const filePath = resolveSmartBoundaryConfigPath(options);
+  const modelKey = normalizeModelKey(options.modelKey);
+
+  if (modelKey) {
+    const existing = await readExistingConfig(filePath);
+    const perModel = { ...existing.perModelBoundaryTokens };
+    delete perModel[modelKey];
+
+    const onDisk: OnDiskSmartBoundaryConfig = {
+      smartBoundaryTokens: existing.smartBoundaryTokens ?? DEFAULT_SMART_BOUNDARY_TOKENS,
+      ...(Object.keys(perModel).length > 0 ? { perModelBoundaryTokens: perModel } : {}),
+    };
+
+    try {
+      await mkdir(nodePath.dirname(filePath), { recursive: true });
+      await writeFile(filePath, `${JSON.stringify(onDisk, null, 2)}\n`, "utf8");
+    } catch (error) {
+      return defaultResult(`Could not remove smart-boundary override for ${modelKey} at ${filePath}: ${errorMessage(error)}. Using default.`, modelKey);
+    }
+
+    return { tokens: onDisk.smartBoundaryTokens as number, boundaryTokens: onDisk.smartBoundaryTokens as number, source: "custom", modelKey };
+  }
 
   try {
     await unlink(filePath);
@@ -131,6 +176,40 @@ function extractBoundaryTokens(config: OnDiskSmartBoundaryConfig): number | unde
   return isPositiveWholeNumber(candidate) ? candidate : undefined;
 }
 
+function extractPerModelBoundaryTokens(config: OnDiskSmartBoundaryConfig): Record<string, number> | undefined {
+  const candidate = config?.perModelBoundaryTokens;
+  if (!candidate || typeof candidate !== "object") {
+    return undefined;
+  }
+
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(candidate as Record<string, unknown>)) {
+    if (isPositiveWholeNumber(value)) {
+      result[key] = value;
+    }
+  }
+
+  return result;
+}
+
+async function readExistingConfig(filePath: string): Promise<{ smartBoundaryTokens?: number; perModelBoundaryTokens: Record<string, number> }> {
+  try {
+    const raw = await readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw) as OnDiskSmartBoundaryConfig;
+    return {
+      smartBoundaryTokens: extractBoundaryTokens(parsed),
+      perModelBoundaryTokens: extractPerModelBoundaryTokens(parsed) ?? {},
+    };
+  } catch {
+    return { perModelBoundaryTokens: {} };
+  }
+}
+
+function normalizeModelKey(modelKey: string | undefined): string | undefined {
+  const trimmed = modelKey?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 function assertPositiveWholeTokens(tokens: number): void {
   if (!isPositiveWholeNumber(tokens)) {
     throw new RangeError("Smart boundary must be a positive whole-number token count.");
@@ -141,11 +220,12 @@ function isPositiveWholeNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-function defaultResult(warning?: string): SmartBoundaryConfigReadResult {
+function defaultResult(warning?: string, modelKey?: string): SmartBoundaryConfigReadResult {
   return {
     tokens: DEFAULT_SMART_BOUNDARY_TOKENS,
     boundaryTokens: DEFAULT_SMART_BOUNDARY_TOKENS,
     source: "default",
+    ...(modelKey ? { modelKey } : {}),
     ...(warning ? { warning } : {}),
   };
 }

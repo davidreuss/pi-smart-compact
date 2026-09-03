@@ -67,20 +67,22 @@ export default function smartCompactExtension(pi: ExtensionAPI) {
       }
 
       if (parsed.action === "show") {
-        const current = await config.read();
+        const current = await config.read({ modelKey: parsed.modelKey });
         return notify(
           ctx,
-          describeCurrentBoundary(current.tokens, current.source === "default", current.warning),
+          describeCurrentBoundary(current, parsed.modelKey),
           current.warning ? "warning" : "info",
         ) as unknown as void;
       }
 
       if (parsed.action === "reset") {
-        const current = await config.reset();
+        const current = await config.reset({ modelKey: parsed.modelKey });
         resetEscalationState(runtimeState);
         const resetFeedback = notify(
           ctx,
-          `Smart boundary reset to the default ${formatTokens(current.tokens)}.`,
+          parsed.modelKey
+            ? `Smart boundary override for ${parsed.modelKey} removed. It now uses the global boundary of ${formatTokens(current.tokens)}.`
+            : `Smart boundary reset to the default ${formatTokens(current.tokens)}.`,
           current.warning ? "warning" : "info",
         );
         const warningFeedback = current.warning ? notify(ctx, current.warning, "warning") : undefined;
@@ -88,9 +90,14 @@ export default function smartCompactExtension(pi: ExtensionAPI) {
         return fallback as unknown as void;
       }
 
-      const saved = await config.write(parsed.tokens);
+      const saved = await config.write(parsed.tokens, { modelKey: parsed.modelKey });
       resetEscalationState(runtimeState);
-      return notify(ctx, `Smart boundary set to ${formatTokens(saved.tokens)}.`) as unknown as void;
+      return notify(
+        ctx,
+        parsed.modelKey
+          ? `Smart boundary for ${parsed.modelKey} set to ${formatTokens(saved.tokens)}.`
+          : `Smart boundary set to ${formatTokens(saved.tokens)}.`,
+      ) as unknown as void;
     },
   });
 }
@@ -337,8 +344,12 @@ async function monitorContextUsage(
   }
 
   let boundaryTokens: number;
+  let boundarySource: string;
   try {
-    boundaryTokens = (await config.read()).tokens;
+    const modelKey = getModelKey(ctx);
+    const boundary = await config.read({ modelKey });
+    boundaryTokens = boundary.tokens;
+    boundarySource = boundary.source;
   } catch (error) {
     notifyIfAvailable(ctx, `Smart compact monitoring could not read boundary config: ${errorMessage(error)}`, "warning");
     return;
@@ -376,10 +387,24 @@ function notifyIfAvailable(
   }
 }
 
-function describeCurrentBoundary(tokens: number, isDefault: boolean, warning?: string): string {
-  const prefix = isDefault ? "Current smart boundary is the default" : "Current smart boundary is";
-  const message = `${prefix} ${formatTokens(tokens)}.`;
-  return warning ? `${message}\nWarning: ${warning}` : message;
+function getModelKey(ctx: ExtensionContext): string | undefined {
+  const model = ctx.model;
+  return model ? `${model.provider}/${model.id}` : undefined;
+}
+
+function describeCurrentBoundary(
+  current: { tokens: number; source: string; modelKey?: string; warning?: string },
+  requestedModelKey: string | undefined,
+): string {
+  const message = requestedModelKey
+    ? current.source === "custom-model"
+      ? `Smart boundary for ${requestedModelKey} is ${formatTokens(current.tokens)} (per-model override).`
+      : `Smart boundary for ${requestedModelKey} is ${formatTokens(current.tokens)} (using the global default, no override set).`
+    : current.source === "default"
+      ? `Current smart boundary is the default ${formatTokens(current.tokens)}.`
+      : `Current smart boundary is ${formatTokens(current.tokens)}.`;
+
+  return current.warning ? `${message}\nWarning: ${current.warning}` : message;
 }
 
 function formatTokens(tokens: number): string {

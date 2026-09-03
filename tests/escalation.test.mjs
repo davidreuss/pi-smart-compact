@@ -236,4 +236,50 @@ describe("U3 token monitoring and escalation steering", () => {
     assert.equal(mock.state.compactCalls.length, 0, "send failure recovery must not fall back to forced compaction");
     assert.equal(mock.state.replacementSessionCalls.length, 0, "send failure recovery must not replace sessions");
   });
+
+  it("uses a per-model override instead of the global boundary when the active model has one", async () => {
+    const mock = await setupExtension();
+    const modelKey = "fireworks/accounts/fireworks/models/glm-5p3";
+    await invokeCommand(mock, "smart-boundary", "100000");
+    await invokeCommand(mock, "smart-boundary", `${modelKey} 300000`);
+
+    await mock.trigger(
+      "turn_end",
+      { type: "turn_end" },
+      contextWithTokens(mock, 120_000, { model: { provider: "fireworks", id: "accounts/fireworks/models/glm-5p3" } }),
+    );
+
+    assert.equal(
+      mock.state.sentUserMessages.length,
+      0,
+      "usage below the model's 300000 override should not warn even though it is above the 100000 global default",
+    );
+
+    await mock.trigger(
+      "turn_end",
+      { type: "turn_end" },
+      contextWithTokens(mock, 300_000, { model: { provider: "fireworks", id: "accounts/fireworks/models/glm-5p3" } }),
+    );
+
+    assert.equal(mock.state.sentUserMessages.length, 1, "crossing the model's own boundary should warn");
+  });
+
+  it("falls back to the global boundary for a model with no override", async () => {
+    const mock = await setupExtension();
+    const modelKey = "fireworks/accounts/fireworks/models/glm-5p3";
+    await invokeCommand(mock, "smart-boundary", "100000");
+    await invokeCommand(mock, "smart-boundary", `${modelKey} 300000`);
+
+    await mock.trigger(
+      "turn_end",
+      { type: "turn_end" },
+      contextWithTokens(mock, 100_000, { model: { provider: "amazon-bedrock", id: "global.anthropic.claude-sonnet-5" } }),
+    );
+
+    assert.equal(
+      mock.state.sentUserMessages.length,
+      1,
+      "a model without its own override should still warn at the 100000 global boundary",
+    );
+  });
 });

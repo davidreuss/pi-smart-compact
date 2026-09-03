@@ -91,3 +91,41 @@ describe("U2 smart-boundary parser", () => {
     }
   });
 });
+
+describe("U2 smart-boundary parser per-model override", () => {
+  const modelKey = "fireworks/accounts/fireworks/models/glm-5p3";
+
+  it("parses a model-id-prefixed token count as a per-model set request", async () => {
+    const result = await parse(`${modelKey} 300k`);
+    assertSet(result, 300_000);
+    assert.equal(result.raw.modelKey, modelKey);
+  });
+
+  it("parses a model-id-prefixed reset as a per-model reset request", async () => {
+    const result = await parse(`${modelKey} reset`);
+    assertReset(result);
+    assert.equal(result.raw.modelKey, modelKey);
+  });
+
+  it("parses a bare model id as a per-model show request", async () => {
+    const result = await parse(modelKey);
+    assertShow(result);
+    assert.equal(result.raw.modelKey, modelKey);
+  });
+
+  it("tolerates surrounding and internal whitespace around the model id", async () => {
+    const result = await parse(`  ${modelKey}   300k  `);
+    assertSet(result, 300_000);
+    assert.equal(result.raw.modelKey, modelKey);
+  });
+
+  it("leaves plain, non-model-id input without a modelKey", async () => {
+    const result = await parse("300k");
+    assertSet(result, 300_000);
+    assert.equal(result.raw.modelKey, undefined);
+  });
+
+  it("rejects a model id prefix with an invalid token count", async () => {
+    assertRejected(await parse(`${modelKey} abc`), `${modelKey} abc`);
+  });
+});

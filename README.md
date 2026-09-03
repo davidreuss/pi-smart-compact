@@ -46,26 +46,50 @@ Do not pass handoff text to this command. The handoff must be written by the act
 
 ## Configure `/smart-boundary`
 
-The default smart boundary is `100k` tokens (`100,000`). Warnings escalate every additional `20k` tokens. The setting is global for this package and applies to main agents and subagents.
+The default smart boundary is `100k` tokens (`100,000`). Warnings escalate every additional `20k` tokens. The setting is global for this package by default and applies to main agents and subagents, unless a per-model override is set.
 
 ```text
 /smart-boundary
 ```
 
-Show the current boundary.
+Show the current global boundary.
 
 ```text
 /smart-boundary 100k
 /smart-boundary 120000
 ```
 
-Set the boundary using `k` shorthand or a plain positive whole-number token count. Deliberately low positive values are accepted for manual testing.
+Set the global boundary using `k` shorthand or a plain positive whole-number token count. Deliberately low positive values are accepted for manual testing.
 
 ```text
 /smart-boundary reset
 ```
 
-Reset to the default `100k` boundary.
+Reset the global boundary to the default `100k`.
+
+### Per-model overrides
+
+Prefix any of the above with a model id in `provider/id` form, the same string used in `enabledModels` in `settings.json`, to scope the change to one model instead of the global default.
+
+```text
+/smart-boundary fireworks/accounts/fireworks/models/glm-5p3
+```
+
+Show the boundary that model is currently using. This reports the model's own override, or notes that it is falling back to the global default.
+
+```text
+/smart-boundary fireworks/accounts/fireworks/models/glm-5p3 300k
+```
+
+Set a boundary just for that model. Other models, and the global default, are unaffected.
+
+```text
+/smart-boundary fireworks/accounts/fireworks/models/glm-5p3 reset
+```
+
+Remove that model's override. The model falls back to the global default again; other models' overrides and the global default are untouched.
+
+A model with no override always uses the current global boundary. Escalation banding during a turn uses the boundary for the session's active model: its own override if one is set, otherwise the global default.
 
 ## Agent workflow
 
@@ -125,7 +149,7 @@ Manual or native Pi compaction without a pending smart handoff behaves normally.
 ## Limitations
 
 - pi-smart-compact is cooperative and does not force compaction; agent compliance is not guaranteed.
-- There are no project-specific, per-agent, or per-subagent boundary settings yet.
+- Per-model boundary overrides exist (see `/smart-boundary <modelKey> <tokens>` above). There are still no project-specific, per-agent, or per-subagent boundary settings; a subagent uses the boundary for whichever model it is running.
 - Native pi auto-compaction remains unchanged and independent.
 - The extension preserves same-session behavior and intentionally does not create replacement sessions.
 - `smart_compact` is designed as a terminal mini-phase tool call, but a multi-tool batch may still depend on Pi runtime termination semantics.

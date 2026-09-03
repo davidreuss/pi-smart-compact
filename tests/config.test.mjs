@@ -61,9 +61,9 @@ async function makeStore(filePath) {
 
   if (typeof mod.readSmartBoundaryConfig === "function" && typeof mod.writeSmartBoundaryConfig === "function") {
     return {
-      read: () => mod.readSmartBoundaryConfig({ configPath: filePath, path: filePath }),
-      write: (tokens) => mod.writeSmartBoundaryConfig(tokens, { configPath: filePath, path: filePath }),
-      reset: () => mod.resetSmartBoundaryConfig?.({ configPath: filePath, path: filePath }),
+      read: (options = {}) => mod.readSmartBoundaryConfig({ configPath: filePath, path: filePath, ...options }),
+      write: (tokens, options = {}) => mod.writeSmartBoundaryConfig(tokens, { configPath: filePath, path: filePath, ...options }),
+      reset: (options = {}) => mod.resetSmartBoundaryConfig?.({ configPath: filePath, path: filePath, ...options }),
     };
   }
 
@@ -81,9 +81,9 @@ function normalizeStore(store, filePath) {
   assert.equal(typeof reset, "function", "config store must expose a reset/remove operation");
 
   return {
-    read: () => read.call(store, { configPath: filePath, path: filePath }),
-    write: (tokens) => write.call(store, tokens, { configPath: filePath, path: filePath }),
-    reset: () => reset.call(store, { configPath: filePath, path: filePath }),
+    read: (options = {}) => read.call(store, { configPath: filePath, path: filePath, ...options }),
+    write: (tokens, options = {}) => write.call(store, tokens, { configPath: filePath, path: filePath, ...options }),
+    reset: (options = {}) => reset.call(store, { configPath: filePath, path: filePath, ...options }),
   };
 }
 
@@ -143,5 +143,71 @@ describe("U2 smart-boundary global config", () => {
 
     assert.equal(resultTokens(read), 100_000);
     assert.ok(String(resultWarning(read) ?? "").trim().length > 0, "unreadable config fallback should surface a warning/reason");
+  });
+});
+
+describe("U2 smart-boundary per-model override", () => {
+  const modelKey = "fireworks/accounts/fireworks/models/glm-5p3";
+  const otherModelKey = "amazon-bedrock/global.anthropic.claude-sonnet-5";
+
+  it("falls back to the global boundary when no per-model override is set", async () => {
+    const filePath = await makeTempConfigPath();
+    const store = await makeStore(filePath);
+    await store.write(150_000);
+
+    const read = await store.read({ modelKey });
+
+    assert.equal(resultTokens(read), 150_000);
+  });
+
+  it("persists a per-model override without changing the global default", async () => {
+    const filePath = await makeTempConfigPath();
+    const store = await makeStore(filePath);
+    await store.write(300_000, { modelKey });
+
+    const globalRead = await store.read();
+    const modelRead = await store.read({ modelKey });
+
+    assert.equal(resultTokens(globalRead), 100_000, "global default should stay at its prior value");
+    assert.equal(resultTokens(modelRead), 300_000, "the overridden model should use its own boundary");
+
+    const onDisk = await readFile(filePath, "utf8");
+    assert.match(onDisk, /300000/, "per-model override should be written to the extension-owned config file");
+  });
+
+  it("keeps overrides for other models independent", async () => {
+    const filePath = await makeTempConfigPath();
+    const store = await makeStore(filePath);
+    await store.write(300_000, { modelKey });
+    await store.write(50_000, { modelKey: otherModelKey });
+
+    assert.equal(resultTokens(await store.read({ modelKey })), 300_000);
+    assert.equal(resultTokens(await store.read({ modelKey: otherModelKey })), 50_000);
+  });
+
+  it("resetting a per-model override falls back to the global boundary without touching other overrides", async () => {
+    const filePath = await makeTempConfigPath();
+    const store = await makeStore(filePath);
+    await store.write(120_000);
+    await store.write(300_000, { modelKey });
+    await store.write(50_000, { modelKey: otherModelKey });
+
+    await store.reset({ modelKey });
+
+    assert.equal(resultTokens(await store.read({ modelKey })), 120_000, "reset model should fall back to the global boundary");
+    assert.equal(resultTokens(await store.read({ modelKey: otherModelKey })), 50_000, "unrelated override should be untouched");
+    assert.equal(resultTokens(await store.read()), 120_000, "global boundary should be untouched");
+  });
+
+  it("a full reset clears per-model overrides along with the global boundary", async () => {
+    const filePath = await makeTempConfigPath();
+    const store = await makeStore(filePath);
+    await store.write(120_000);
+    await store.write(300_000, { modelKey });
+
+    await store.reset();
+
+    assert.equal(resultTokens(await store.read()), 100_000);
+    assert.equal(resultTokens(await store.read({ modelKey })), 100_000);
   });
 });
